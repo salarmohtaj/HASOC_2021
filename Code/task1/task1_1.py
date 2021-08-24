@@ -1,6 +1,6 @@
 import pandas as pd
 
-df = pd.read_csv("../../Data/2021/Subtask 1/English/en_Hasoc2021_train.csv",sep=",")
+df = pd.read_csv("../../Data/2021/Subtask 1/English/rawData.csv",sep=",")
 print(df.head())
 print(df.shape)
 print(df.columns)

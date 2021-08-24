@@ -1,24 +1,21 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import torch
-
-# Preliminaries
-from torchtext.legacy.data import Field, TabularDataset, BucketIterator
-
-# Models
+from torchtext.legacy.data import Field, LabelField, TabularDataset, BucketIterator
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-
-# Training
 import torch.optim as optim
-
-# Evaluation
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-import seaborn as sns
 import os
-import sys
+import re
 import pickle
+import demoji
+
+
+
+########################################################################
 runmane = "lstmcharacter"
+BATCH_SIZE = 32
 number_of_epochs = int(30)
 learning_rate = float(0.001)
 dropout = float(0.5)
@@ -26,61 +23,95 @@ language_name = str("English")
 # number_of_epochs = int(2)
 # learning_rate = float(0.0001)
 # language_name = str("english")
-destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(number_of_epochs)+"_"+str(learning_rate)+"_"+str(dropout)
-
-
 print(number_of_epochs)
 print(learning_rate)
 print(dropout)
 print(language_name)
-print(destination_folder)
+destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(number_of_epochs)+"_"+str(learning_rate)+"_"+str(dropout)
+########################################################################
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
-source_folder = "data/"+language_name+"/"
+
+source_folder = "data/"
 try:
     os.mkdir(destination_folder)
 except:
     pass
 
 
+def text_preprocess(text):
+    text = re.sub("@([A-Za-z0-9_]+)", "username", text)
+    text = re.sub(r"http\S+", "link", text)
+    text = demoji.replace_with_desc(text, sep=" ")
+    text = re.sub("[ ]+", " ", text)
+    return list(text)
+
+#tokenizer = lambda text: list(text)
+def fake_tokenizer(text):
+    return text
+
+text_field = Field(tokenize = fake_tokenizer, sequential = True, preprocessing = text_preprocess, lower = True, include_lengths = True, batch_first = True)
+#label_field = Field(sequential=False, use_vocab=False, batch_first=True, dtype=torch.float)
+label_field = LabelField(is_target=True, dtype=torch.float)
+fields = [(None, None), ("_id", None), ('text', text_field), ('label', label_field), ('task_2', None)]
 
 
-# Fields
-# source_folder = "data/english/"
-# destination_folder = "Model"
-tokenize = lambda s: list(s)
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-label_field = Field(sequential=False, use_vocab=False, batch_first=True, dtype=torch.float)
-#text_field = Field(tokenize="spacy", lower=True, include_lengths=True, batch_first=True)
-text_field = Field(tokenize=tokenize, lower=True, include_lengths=True, batch_first=True)
-#fields = [('label', label_field), ('title', text_field), ('text', text_field), ('titletext', text_field)]
-#fields = [('label', label_field), (None, None), ('text', text_field), (None, None)]
-fields = [('label', label_field), ('text', text_field)]
+dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=fields, skip_header=True)
 
-# TabularDataset
-train, valid, test = TabularDataset.splits(path=source_folder, train='train.csv', validation='valid.csv', test='test.csv',format='CSV', fields=fields, skip_header=True)
+#print(dataset[0].__dict__.keys())
+#print(dataset[0].text)
+#print(dataset[0].label)
+#print(len(dataset))
 
-# print(train[0])
-# print(train[0].__dict__.keys())
-# print(train[0].text)
-#
+train, test, valid = dataset.split([0.8, 0.1, 0.1], stratified=True) ## Keeping the same ratio of labels in the train, valid and test datasets
+text_field.build_vocab(train, min_freq=2)
+label_field.build_vocab(train)
+#print(label_field.vocab.itos)
+#print(label_field.vocab.stoi)
+#print(len(train))
+#print(len(valid))
 
 # Iterators
-train_iter = BucketIterator(train, batch_size=32, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
-valid_iter = BucketIterator(valid, batch_size=32, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
-test_iter = BucketIterator(test, batch_size=32, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
+train_iter = BucketIterator(train, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
+valid_iter = BucketIterator(valid, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
+test_iter = BucketIterator(test, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
 
-# Vocabulary
-text_field.build_vocab(train, min_freq=3)
 
-with open(language_name+"Vocab.pickle",'wb') as f:
-    pickle.dump(text_field.vocab,f)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class LSTM(nn.Module):
 
     def __init__(self, dimension=256):
         super(LSTM, self).__init__()
-
         self.embedding = nn.Embedding(len(text_field.vocab), 300)
         self.dimension = dimension
         self.lstm = nn.LSTM(input_size=300,
@@ -184,7 +215,7 @@ def train(model,
     model.train()
     for epoch in range(num_epochs):
         #for (labels, (title, title_len), (text, text_len), (titletext, titletext_len)), _ in train_loader:
-        for (labels, (text, text_len)), _ in train_loader:
+        for ((text, text_len), labels) in train_loader:
             labels = labels.to(device)
             #titletext = titletext.to(device)
             #titletext_len = titletext_len.to(device)
@@ -208,7 +239,8 @@ def train(model,
                 with torch.no_grad():
                     # validation loop
                     #for (labels, (title, title_len), (text, text_len), (titletext, titletext_len)), _ in valid_loader:
-                    for (labels, (text, text_len)), _ in valid_loader:
+                    #for (labels, (text, text_len)), _ in valid_loader:
+                    for ((text, text_len),labels) in valid_loader:
                         labels = labels.to(device)
                         #titletext = titletext.to(device)
                         #titletext_len = titletext_len.to(device)
@@ -270,7 +302,7 @@ def evaluate(model, test_loader, version='title', threshold=0.5):
     model.eval()
     with torch.no_grad():
         #for (labels, (title, title_len), (text, text_len), (titletext, titletext_len)), _ in test_loader:
-        for (labels, (text, text_len)), _ in test_loader:
+        for ((text, text_len), labels) in test_loader:
             labels = labels.to(device)
             #titletext = titletext.to(device)
             #titletext_len = titletext_len.to(device)

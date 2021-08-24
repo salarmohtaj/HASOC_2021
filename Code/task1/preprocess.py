@@ -23,10 +23,8 @@ def preprocess(text):
 
 
 def trim_string(x):
-
     x = str(x).split(maxsplit=first_n_words)
     x = ' '.join(x[:first_n_words])
-
     return x
 
 # Read raw data
