@@ -293,7 +293,6 @@ def format_time(elapsed):
 
 # Set the seed value all over the place to make this reproducible.
 seed_val = 42
-
 random.seed(seed_val)
 np.random.seed(seed_val)
 torch.manual_seed(seed_val)
@@ -374,6 +373,8 @@ for epoch_i in range(0, epochs):
         #                      labels=b_labels)
         #
         text = batch.text.t()
+        print(text.size())
+        print(batch.label.size())
         prediction = model(text, labels=batch.label)
         #prediction = model(b_input_ids,
         #                     token_type_ids=None,

@@ -39,7 +39,7 @@ from transformers import BertTokenizer, BertModel
 import torch.nn as nn
 import torch.optim as optim
 import time
-
+import os
 
 runmane = "lstmcharacter"
 number_of_epochs = int(30)
@@ -235,6 +235,8 @@ def train(model, iterator, optimizer, criterion):
 
     for batch in iterator:
         optimizer.zero_grad()
+        print(batch.label.size())
+        print(batch.text.size())
 
         predictions = model(batch.text).squeeze(1)
         print(predictions)

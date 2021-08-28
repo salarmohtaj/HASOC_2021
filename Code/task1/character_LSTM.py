@@ -80,6 +80,8 @@ class LSTM(nn.Module):
 
     def __init__(self, dimension=256):
         super(LSTM, self).__init__()
+        print(len(text_field.vocab))
+        print(type(len(text_field.vocab)))
 
         self.embedding = nn.Embedding(len(text_field.vocab), 300)
         self.dimension = dimension

@@ -2,31 +2,32 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 from torchtext.legacy.data import Field, LabelField, TabularDataset, BucketIterator
-import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import torch.optim as optim
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from transformers import BertForSequenceClassification, AdamW, BertConfig, BertTokenizer, get_linear_schedule_with_warmup
 import os
 import re
 import pickle
 import demoji
 import time
+import numpy as np
 from collections import OrderedDict
-
 
 
 ########################################################################
 runmane = "lstmcharacter"
 BATCH_SIZE = 32
-number_of_epochs = int(50)
+number_of_epochs = int(4)
 
-#learning_rate = float(0.001)
+learning_rate = float(0.001)
 language_name = str("English")
-
-#embedding_size = 300
-#hidden_size = 256
+bert_model_name = "bert-base-uncased"
+MAX_LEN = 128
+embedding_size = 300
+hidden_size = 256
 number_of_layers = 2
-#dropout = float(0.5)
+dropout = float(0.5)
 print(number_of_epochs)
 destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(number_of_epochs)+"_"+str(learning_rate)+"_"+str(dropout)
 
@@ -52,17 +53,27 @@ def text_preprocess(text):
     text = re.sub(r"http\S+", "link", text)
     text = demoji.replace_with_desc(text, sep=" ")
     text = re.sub("[ ]+", " ", text)
-    return list(text)
-
-#tokenizer = lambda text: list(text)
-def fake_tokenizer(text):
     return text
 
-text_field = Field(tokenize = fake_tokenizer, sequential = True, preprocessing = text_preprocess, lower = True, include_lengths = True, batch_first = True)
-#text_field = Field(tokenize = "spacy", sequential = True, preprocessing = None, lower = True, include_lengths = True, batch_first = True)
+tokenizer = BertTokenizer.from_pretrained(bert_model_name)
+
+# A small helper function that will call the BERT tokenizer and truncate.
+def bert_tokenize(text):
+    text = text_preprocess(text)
+    return tokenizer.tokenize(text)[:MAX_LEN - 2]
+
+# add the [CLS] token in the beginning and [SEP] at the end, and that we use a dummy padding token
+# compatible with BERT.
+text_field = Field(sequential=True, tokenize=bert_tokenize, pad_token=tokenizer.pad_token,
+                   init_token=tokenizer.cls_token, eos_token=tokenizer.sep_token,
+                   batch_first=True
+                   )
+
 #label_field = Field(sequential=False, use_vocab=False, batch_first=True, dtype=torch.float)
-label_field = LabelField(is_target=True, dtype=torch.float)
+#label_field = LabelField(is_target=True, dtype=torch.float)
+label_field = LabelField(is_target=True)
 fields = [(None, None), ("_id", None), ('text', text_field), ('label', label_field), ('task_2', None)]
+
 
 dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=fields, skip_header=True)
 
@@ -74,50 +85,57 @@ dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=
 train, test, valid = dataset.split([0.7, 0.1, 0.2], stratified=True) ## Keeping the same ratio of labels in the train, valid and test datasets
 text_field.build_vocab(train, min_freq=2)
 label_field.build_vocab(train)
-label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
-
 #print(label_field.vocab.itos)
 #print(label_field.vocab.stoi)
+label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
+
 #print(len(train))
 #print(len(valid))
+# Here, we tell torchtext to use the vocabulary of BERT's tokenizer.
+# .stoi is the map from strings to integers, and itos from integers to strings.
+text_field.vocab.stoi = tokenizer.vocab
+text_field.vocab.itos = list(tokenizer.vocab)
 
 # Iterators
 train_iter = BucketIterator(train, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
 valid_iter = BucketIterator(valid, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
 test_iter = BucketIterator(test, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
 
+model = BertForSequenceClassification.from_pretrained(
+    bert_model_name, # Use the 12-layer BERT model, with an uncased vocab.
+    num_labels=2, # The number of output labels--2 for binary classification.
+                    # You can increase this for multi-class tasks.
+    output_attentions=False, # Whether the model returns attentions weights.
+    output_hidden_states=False, # Whether the model returns all hidden-states.
+).to(device)
 
+def parameters_stat(model):
+    params = list(model.named_parameters())
+    print('The BERT model has {:} different named parameters.\n'.format(len(params)))
+    print('==== Embedding Layer ====\n')
+    for p in params[0:5]:
+        print("{:<55} {:>12}".format(p[0], str(tuple(p[1].size()))))
+    print('\n==== First Transformer ====\n')
+    for p in params[5:21]:
+        print("{:<55} {:>12}".format(p[0], str(tuple(p[1].size()))))
+    print('\n==== Output Layer ====\n')
+    for p in params[-4:]:
+        print("{:<55} {:>12}".format(p[0], str(tuple(p[1].size()))))
 
-class LSTM(nn.Module):
-    def __init__(self,
-                 input_size,
-                 embedding_size = 300,
-                 hidden_size = 256,
-                 number_of_layers = 2,
-                 dropout = 0.5):
-        super(LSTM, self).__init__()
-        self.embedding = nn.Embedding(input_size, embedding_size)
-        self.hidden_size = hidden_size
-        self.lstm = nn.LSTM(input_size=embedding_size,
-                            hidden_size=hidden_size,
-                            num_layers=number_of_layers,
-                            batch_first=True,
-                            bidirectional=True)
-        self.drop = nn.Dropout(p=dropout)
-        self.fc = nn.Linear(2*hidden_size, 1)
-    def forward(self, text, text_len):
-        text_emb = self.embedding(text)
-        packed_input = pack_padded_sequence(text_emb, text_len.cpu(), batch_first=True, enforce_sorted=False)
-        packed_output, _ = self.lstm(packed_input)
-        output, _ = pad_packed_sequence(packed_output, batch_first=True)
-        out_forward = output[range(len(output)), text_len - 1, :self.hidden_size]
-        out_reverse = output[:, 0, self.hidden_size:]
-        out_reduced = torch.cat((out_forward, out_reverse), 1)
-        text_fea = self.drop(out_reduced)
-        text_fea = self.fc(text_fea)
-        text_fea = torch.squeeze(text_fea, 1)
-        text_out = torch.sigmoid(text_fea)
-        return text_out
+#parameters_stat(model)
+
+optimizer = AdamW(model.parameters(),
+                  lr = 2e-5,eps = 1e-8)
+total_steps = len(train_iter) * number_of_epochs
+scheduler = get_linear_schedule_with_warmup(optimizer,
+                                            num_warmup_steps = 0, # Default value in run_glue.py
+                                            num_training_steps = total_steps)
+
+def flat_accuracy(preds, labels):
+    pred_flat = np.argmax(preds, axis=1).flatten()
+    labels_flat = labels.flatten()
+    return np.sum(pred_flat == labels_flat) / len(labels_flat)
+
 
 
 # Save and Load Functions
@@ -155,23 +173,29 @@ def load_metrics(load_path):
     #print(f'Model loaded from <== {load_path}')
     return state_dict['train_loss_list'], state_dict['valid_loss_list'], state_dict['epoch_counter_list']
 
+criterion = torch.nn.BCELoss()
+training_stats = []
 
 # Training Function
 def train(model, iterator, optimizer, criterion):
     epoch_loss = 0
     epoch_acc = 0
     model.train()
-    for ((text, text_len), labels) in iterator:
+    for batch in iterator:
         optimizer.zero_grad()
-        labels = labels.to(device)
-        text = text.to(device)
-        text_len = text_len.to(device)
-        output = model(text, text_len)
-        loss = criterion(output, labels)
-        acc = binary_accuracy(output, labels)
+        labels = batch.label
+        #text = batch.text.t()
+        text = batch.text
+        output = model(text, labels=labels)
+        loss = output["loss"]
+        logits = output["logits"]
+        logits = logits.detach().cpu().numpy()
+        label_ids = labels.to('cpu').numpy()
+        acc = flat_accuracy(logits, label_ids)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        # update running values
+        scheduler.step()
         epoch_loss += loss.item()
         epoch_acc += acc.item()
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
@@ -182,26 +206,22 @@ def evaluate(model, iterator, criterion):
     epoch_acc = 0
     model.eval()
     with torch.no_grad():
-        for ((text, text_len), labels) in iterator:
-            labels = labels.to(device)
-            text = text.to(device)
-            text_len = text_len.to(device)
-            output = model(text, text_len)
-            loss = criterion(output, labels)
-            acc = binary_accuracy(output, labels)
+        for batch in iterator:
+            labels = batch.label
+            #text = batch.text.t()
+            text = batch.text
+            output = model(text, labels=labels)
+            loss = output["loss"]
+            logits = output["logits"]
+            logits = logits.detach().cpu().numpy()
+            label_ids = labels.to('cpu').numpy()
+            acc = flat_accuracy(logits, label_ids)
             epoch_loss += loss.item()
             epoch_acc += acc.item()
+            #logits = logits.detach().cpu().numpy()
+            #label_ids = batch.label.to('cpu').numpy()
+            #total_eval_accuracy += flat_accuracy(logits, label_ids)
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
-
-
-input_size = len(text_field.vocab)
-model = LSTM(input_size,
-             embedding_size,
-             hidden_size,
-             number_of_layers,
-             dropout).to(device)
-criterion=nn.BCELoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -220,6 +240,7 @@ def epoch_time(start_time, end_time):
     elapsed_mins = int(elapsed_time / 60)
     elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
     return elapsed_mins, elapsed_secs
+
 
 best_valid_loss=float("Inf")
 
@@ -244,7 +265,7 @@ for epoch in range(number_of_epochs):
         last_best_loss = epoch
         print("\t---> Saving the model <---")
         best_valid_loss = valid_loss
-        #torch.save(model.state_dict(), 'tut6-model.pt')
+        ##torch.save(model.state_dict(), 'tut6-model.pt')
         save_checkpoint(destination_folder + '/model.pt', model, optimizer, best_valid_loss)
         save_metrics(destination_folder + '/metrics.pt', train_loss_list, valid_loss_list, epoch_counter_list)
     training_stats.append(
@@ -257,12 +278,6 @@ for epoch in range(number_of_epochs):
             'Training Time': epoch_mins,
         }
     )
-    if ((epoch - last_best_loss) > 9):
-        print("################")
-        print("Termination because of lack of improvement in the last 10 epochs")
-        print("################")
-        break
-
 save_metrics(destination_folder + '/metrics.pt', train_loss_list, valid_loss_list, epoch_counter_list)
 print('Finished Training!')
 
@@ -280,12 +295,22 @@ def test_evaluation(model, test_loader, version='title', threshold=0.5):
     y_true = []
     model.eval()
     with torch.no_grad():
-        for ((text, text_len), labels) in test_loader:
-            labels = labels.to(device)
-            text = text.to(device)
-            text_len = text_len.to(device)
-            output = model(text, text_len)
-            output = (output > threshold).int()
+        for batch in test_loader:
+            labels = batch.label.to(device)
+            #text = batch.text.t().to(device)
+            text = batch.text.to(device)
+            #labels = batch.label
+            #text = batch.text.t()
+            output = model(text, labels=labels)
+            logits = output["logits"]
+            logits = logits.detach().cpu().numpy()
+            #label_ids = labels.to('cpu').numpy()
+            #acc = flat_accuracy(logits, label_ids)
+            output = np.argmax(logits, axis=1).flatten()
+            labels = labels.flatten()
+
+            #output = model(text, text_len)
+            #output = (output > threshold).int()
             y_pred.extend(output.tolist())
             y_true.extend(labels.tolist())
 
@@ -302,11 +327,13 @@ def test_evaluation(model, test_loader, version='title', threshold=0.5):
 
 
 #best_model = LSTM().to(device)
-best_model = LSTM(input_size,
-             embedding_size,
-             hidden_size,
-             number_of_layers,
-             dropout).to(device)
+best_model = BertForSequenceClassification.from_pretrained(
+    bert_model_name, # Use the 12-layer BERT model, with an uncased vocab.
+    num_labels=2, # The number of output labels--2 for binary classification.
+                    # You can increase this for multi-class tasks.
+    output_attentions=False, # Whether the model returns attentions weights.
+    output_hidden_states=False, # Whether the model returns all hidden-states.
+).to(device)
 #best_model.load_state_dict(torch.load('tut6-model.pt'))
 
 

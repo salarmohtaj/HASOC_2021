@@ -12,6 +12,8 @@ import pickle
 import demoji
 import time
 from collections import OrderedDict
+import spacy
+spacy_en = spacy.load('en')
 
 
 
@@ -20,13 +22,13 @@ runmane = "lstmcharacter"
 BATCH_SIZE = 32
 number_of_epochs = int(50)
 
-#learning_rate = float(0.001)
+learning_rate = float(0.001)
 language_name = str("English")
 
-#embedding_size = 300
-#hidden_size = 256
+embedding_size = 300
+hidden_size = 256
 number_of_layers = 2
-#dropout = float(0.5)
+dropout = float(0.5)
 print(number_of_epochs)
 destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(number_of_epochs)+"_"+str(learning_rate)+"_"+str(dropout)
 
@@ -52,7 +54,7 @@ def text_preprocess(text):
     text = re.sub(r"http\S+", "link", text)
     text = demoji.replace_with_desc(text, sep=" ")
     text = re.sub("[ ]+", " ", text)
-    return list(text)
+    return [tok.text for tok in spacy_en.tokenizer(text)]
 
 #tokenizer = lambda text: list(text)
 def fake_tokenizer(text):
