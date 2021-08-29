@@ -12,28 +12,43 @@ import pickle
 import demoji
 import time
 from collections import OrderedDict
+import argparse
 import spacy
-spacy_en = spacy.load('en')
+spacy_en = spacy.load('en_web_core_sm')
 
 
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Master script to prepare the ACR test')
+    parser.add_argument("--epochs", help="Number of epochs, default=50", default=50)
+    parser.add_argument("--lr", help="Learning rate for Adam, default=1e-3", default=1e-3)
+    parser.add_argument("--embedding", help="The embedding size, default=100", default=100)
+    parser.add_argument("--glove", help="Using Glove for vectorization, default=False", default=False)
+    parser.add_argument("--hidden", help="The hidden size, default=256", default=256)
+    parser.add_argument("--dropout", help="The dropout, default=0.25", default=0.25)
+    args = parser.parse_args()
+
+#N_EPOCHS = int(args.epochs)
+#learning_rate = float(args.lr)
 
 ########################################################################
-runmane = "lstmcharacter"
+runmane = "word_lstm"
 BATCH_SIZE = 32
-number_of_epochs = int(50)
+number_of_epochs = int(args.epochs)
+embedding_size = int(args.embedding)
+learning_rate = float(args.lr)
+glove = args.glove
+hidden_size = int(args.hidden)
+dropout = float(args.dropout)
 
-learning_rate = float(0.001)
-language_name = str("English")
 
-embedding_size = 300
-hidden_size = 256
 number_of_layers = 2
-dropout = float(0.5)
-print(number_of_epochs)
-destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(number_of_epochs)+"_"+str(learning_rate)+"_"+str(dropout)
 
-
+language_name = str("English")
+destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(embedding_size)+"_"+str(int(glove))+"_"+str(learning_rate)+"_"+str(dropout)
+report_address = "Reports/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(embedding_size)+"_"+str(int(glove))+"_"+str(learning_rate)+"_"+str(dropout)
 ########################################################################
+
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
@@ -44,10 +59,15 @@ try:
 except:
     pass
 try:
+    os.mkdir("Reports")
+except:
+    pass
+try:
     os.mkdir(destination_folder)
 except:
     pass
-
+with open(report_address,"a+") as f:
+    f.write(runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(embedding_size)+"_"+str(int(glove))+"_"+str(learning_rate)+"_"+str(dropout)+"\n\n")
 
 def text_preprocess(text):
     text = re.sub("@([A-Za-z0-9_]+)", "username", text)
@@ -74,7 +94,13 @@ dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=
 #print(len(dataset))
 
 train, test, valid = dataset.split([0.7, 0.1, 0.2], stratified=True) ## Keeping the same ratio of labels in the train, valid and test datasets
-text_field.build_vocab(train, min_freq=2)
+
+if glove:
+    text_field.build_vocab(train, min_freq=2, vectors='glove.6B.' + str(embedding_size) + 'd')
+else:
+    text_field.build_vocab(train, min_freq=2)
+
+
 label_field.build_vocab(train)
 label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
 
@@ -242,6 +268,10 @@ for epoch in range(number_of_epochs):
     print(f'Epoch: {epoch + 1:02}/{number_of_epochs} | Epoch Time: {epoch_mins}m {epoch_secs}s')
     print(f'\tTrain Loss: {train_loss:.3f} | Train Acc: {train_acc * 100:.2f}%')
     print(f'\tVal. Loss: {valid_loss:.3f} |  Val. Acc: {valid_acc * 100:.2f}%')
+    with open(report_address, "a") as f:
+        f.write("Epoch "+str(epoch+1)+"\n")
+        f.write("Train Loss: "+str(train_loss)+"\tTrain Acc"+str(train_acc)+"\n")
+        f.write("Val. Loss: " + str(valid_loss) + "\tVal. Acc" + str(valid_acc)+"\n")
     if valid_loss < best_valid_loss:
         last_best_loss = epoch
         print("\t---> Saving the model <---")
@@ -263,6 +293,8 @@ for epoch in range(number_of_epochs):
         print("################")
         print("Termination because of lack of improvement in the last 10 epochs")
         print("################")
+        with open(report_address, "a") as f:
+            f.write("Termination because of lack of improvement in the last 10 epochs\n")
         break
 
 save_metrics(destination_folder + '/metrics.pt', train_loss_list, valid_loss_list, epoch_counter_list)
@@ -292,8 +324,12 @@ def test_evaluation(model, test_loader, version='title', threshold=0.5):
             y_true.extend(labels.tolist())
 
     print('Classification Report:')
-    print(classification_report(y_true, y_pred, labels=[1, 0], digits=4))
+    classificationreport = classification_report(y_true, y_pred, labels=[1, 0], digits=4)
+    print(classificationreport)
     cm = confusion_matrix(y_true, y_pred, labels=[1, 0])
+    with open(report_address, "a") as f:
+        f.write("Classification Report:\n")
+        f.write(str(classificationreport)+"\n")
     #ax = plt.subplot()
     #sns.heatmap(cm, annot=True, ax=ax, cmap='Blues', fmt="d")
     #ax.set_title('Confusion Matrix')
@@ -313,5 +349,5 @@ best_model = LSTM(input_size,
 
 
 load_checkpoint(destination_folder + '/model.pt', best_model, optimizer)
-optimizer = optim.Adam(best_model.parameters(), lr=0.001)
+optimizer = optim.Adam(best_model.parameters(), lr=learning_rate)
 test_evaluation(best_model, test_iter)

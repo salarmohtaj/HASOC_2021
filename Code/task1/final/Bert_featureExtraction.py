@@ -14,29 +14,41 @@ import demoji
 import time
 import numpy as np
 from collections import OrderedDict
+import argparse
 
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Master script to prepare the ACR test')
+    parser.add_argument("--epochs", help="Number of epochs, default=50", default=50)
+    parser.add_argument("--bert", help="Bert model (base or large), default=base", default="base")
+    parser.add_argument("--lr", help="Learning rate for Adam, default=1e-3", default=1e-3)
+    parser.add_argument("--hidden", help="The hidden size, default=256", default=256)
+    parser.add_argument("--dropout", help="The dropout, default=0.25", default=0.25)
+    args = parser.parse_args()
+
+#N_EPOCHS = int(args.epochs)
+#learning_rate = float(args.lr)
 
 ########################################################################
-runmane = "lstmcharacter"
-#BATCH_SIZE = 32
-number_of_epochs = int(50)
+runmane = "bert_feature_extraction"
+BATCH_SIZE = 32
+number_of_epochs = int(args.epochs)
+learning_rate = float(args.lr)
+hidden_size = int(args.hidden)
+dropout = float(args.dropout)
+bert_model = str(args.bert)
 
-hidden_size = 256
 OUTPUT_DIM = 1
 number_of_layers = 2
 BIDIRECTIONAL = True
-dropout = float(0.25)
-
-learning_rate = float(0.001)
-language_name = str("English")
-bert_model_name = "bert-base-uncased"
+bert_model_name = "bert-"+bert_model+"-uncased"
 MAX_LEN = 128
-
-print(number_of_epochs)
-destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(number_of_epochs)+"_"+str(learning_rate)+"_"+str(dropout)
-
-
+language_name = str("English")
+destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(bert_model)+"_"+str(learning_rate)+"_"+str(dropout)
+report_address = "Reports/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(bert_model)+"_"+str(learning_rate)+"_"+str(dropout)
 ########################################################################
+
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
@@ -47,9 +59,16 @@ try:
 except:
     pass
 try:
+    os.mkdir("Reports")
+except:
+    pass
+try:
     os.mkdir(destination_folder)
 except:
     pass
+with open(report_address,"a+") as f:
+    f.write(runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(bert_model)+"_"+str(learning_rate)+"_"+str(dropout)+"\n\n")
+
 
 
 def text_preprocess(text):
@@ -211,7 +230,7 @@ def print_grad_parameters(model):
             print(name)
 
 
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 criterion = nn.BCELoss()
 model = model.to(device)
 criterion = criterion.to(device)
@@ -291,6 +310,10 @@ for epoch in range(number_of_epochs):
     print(f'Epoch: {epoch + 1:02}/{number_of_epochs} | Epoch Time: {epoch_mins}m {epoch_secs}s')
     print(f'\tTrain Loss: {train_loss:.3f} | Train Acc: {train_acc * 100:.2f}%')
     print(f'\tVal. Loss: {valid_loss:.3f} |  Val. Acc: {valid_acc * 100:.2f}%')
+    with open(report_address, "a") as f:
+        f.write("Epoch "+str(epoch+1)+"\n")
+        f.write("Train Loss: "+str(train_loss)+"\tTrain Acc"+str(train_acc)+"\n")
+        f.write("Val. Loss: " + str(valid_loss) + "\tVal. Acc" + str(valid_acc)+"\n")
     if valid_loss < best_valid_loss:
         last_best_loss = epoch
         print("\t---> Saving the model <---")
@@ -308,6 +331,13 @@ for epoch in range(number_of_epochs):
             'Training Time': epoch_mins,
         }
     )
+    if ((epoch - last_best_loss) > 9):
+        print("################")
+        print("Termination because of lack of improvement in the last 10 epochs")
+        print("################")
+        with open(report_address, "a") as f:
+            f.write("Termination because of lack of improvement in the last 10 epochs\n")
+        break
 save_metrics(destination_folder + '/metrics.pt', train_loss_list, valid_loss_list, epoch_counter_list)
 print('Finished Training!')
 
@@ -325,18 +355,24 @@ def test_evaluation(model, test_loader, version='title', threshold=0.5):
     y_true = []
     model.eval()
     with torch.no_grad():
-        for ((text, text_len), labels) in test_loader:
-            labels = labels.to(device)
-            text = text.to(device)
-            text_len = text_len.to(device)
-            output = model(text, text_len)
-            output = (output > threshold).int()
+        for batch in test_loader:
+            labels = batch.label.to(device)
+            # text = batch.text.t()
+            text = batch.text.to(device)
+            output = model(text).squeeze(1)
+            output = output.flatten()
+            labels = labels.flatten()
+            output = torch.round(output)
             y_pred.extend(output.tolist())
             y_true.extend(labels.tolist())
 
     print('Classification Report:')
-    print(classification_report(y_true, y_pred, labels=[1, 0], digits=4))
+    classificationreport = classification_report(y_true, y_pred, labels=[1, 0], digits=4)
+    print(classificationreport)
     cm = confusion_matrix(y_true, y_pred, labels=[1, 0])
+    with open(report_address, "a") as f:
+        f.write("Classification Report:\n")
+        f.write(str(classificationreport) + "\n")
     #ax = plt.subplot()
     #sns.heatmap(cm, annot=True, ax=ax, cmap='Blues', fmt="d")
     #ax.set_title('Confusion Matrix')
@@ -357,5 +393,5 @@ best_model = BERTGRUSentiment(bert,
 
 
 load_checkpoint(destination_folder + '/model.pt', best_model, optimizer)
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 test_evaluation(best_model, test_iter)

@@ -13,26 +13,32 @@ import demoji
 import time
 import numpy as np
 from collections import OrderedDict
+import argparse
+
+
+
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Master script to prepare the ACR test')
+    parser.add_argument("--epochs", help="Number of epochs, default=2", default=2)
+    parser.add_argument("--bert", help="Bert model (base or large), default=base", default="base")
+    args = parser.parse_args()
 
 
 ########################################################################
-runmane = "lstmcharacter"
+runmane = "bert_finetune"
 BATCH_SIZE = 32
-number_of_epochs = int(4)
+number_of_epochs = int(args.epochs)
+bert_model = str(args.bert)
 
-learning_rate = float(0.001)
-language_name = str("English")
-bert_model_name = "bert-base-uncased"
+bert_model_name = "bert-"+bert_model+"-uncased"
 MAX_LEN = 128
-embedding_size = 300
-hidden_size = 256
-number_of_layers = 2
-dropout = float(0.5)
-print(number_of_epochs)
-destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(number_of_epochs)+"_"+str(learning_rate)+"_"+str(dropout)
-
-
+language_name = str("English")
+destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(bert_model)
+report_address = "Reports/"+runmane+"_"+language_name+"_"+"_"+str(bert_model)
 ########################################################################
+
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
@@ -43,9 +49,20 @@ try:
 except:
     pass
 try:
+    os.mkdir("Reports")
+except:
+    pass
+try:
     os.mkdir(destination_folder)
 except:
     pass
+with open(report_address,"a+") as f:
+    f.write(runmane+"_"+language_name+"_"+str(bert_model)+"\n\n")
+
+
+
+
+
 
 
 def text_preprocess(text):
