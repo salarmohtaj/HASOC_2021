@@ -14,7 +14,10 @@ import time
 from collections import OrderedDict
 import argparse
 import spacy
-spacy_en = spacy.load('en_web_core_sm')
+try:
+    spacy_en = spacy.load('en_core_web_sm')
+except:
+    spacy_en = spacy.load('en')
 
 
 
@@ -38,6 +41,10 @@ number_of_epochs = int(args.epochs)
 embedding_size = int(args.embedding)
 learning_rate = float(args.lr)
 glove = args.glove
+if glove == "False":
+    glove = False
+else:
+    glove = True
 hidden_size = int(args.hidden)
 dropout = float(args.dropout)
 
@@ -51,7 +58,9 @@ report_address = "Reports/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+s
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-
+number_of_epochs = 1
+embedding_size = 50
+hidden_size = 16
 
 source_folder = "data/"
 try:
@@ -80,6 +89,7 @@ def text_preprocess(text):
 def fake_tokenizer(text):
     return text
 
+
 text_field = Field(tokenize = fake_tokenizer, sequential = True, preprocessing = text_preprocess, lower = True, include_lengths = True, batch_first = True)
 #text_field = Field(tokenize = "spacy", sequential = True, preprocessing = None, lower = True, include_lengths = True, batch_first = True)
 #label_field = Field(sequential=False, use_vocab=False, batch_first=True, dtype=torch.float)
@@ -95,20 +105,29 @@ dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=
 
 train, test, valid = dataset.split([0.7, 0.1, 0.2], stratified=True) ## Keeping the same ratio of labels in the train, valid and test datasets
 
-if glove:
-    text_field.build_vocab(train, min_freq=2, vectors='glove.6B.' + str(embedding_size) + 'd')
-else:
-    text_field.build_vocab(train, min_freq=2)
-
+#if glove:
+#    text_field.build_vocab(train, min_freq=2, vectors='glove.6B.' + str(embedding_size) + 'd')
+#else:
+#    text_field.build_vocab(train, min_freq=2)
+text_field.build_vocab(train, min_freq=2)
 
 label_field.build_vocab(train)
-label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
-
+#label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
+#print(label_field.vocab.itos)
+#print(label_field.vocab.stoi)
+#label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
+#print(label_field.vocab.stoi[train[0].label])
+#print(label_field.vocab(["NOT"]))
 #print(label_field.vocab.itos)
 #print(label_field.vocab.stoi)
 #print(len(train))
 #print(len(valid))
-
+# print(label_field.vocab.stoi)
+# label_field.vocab.itos[1] = "HOF"
+# label_field.vocab.itos[0] = "NOT"
+#print(label_field.vocab.itos[1])
+# print(label_field.vocab.itos[0])
+# print(label_field.vocab.stoi)
 # Iterators
 train_iter = BucketIterator(train, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
 valid_iter = BucketIterator(valid, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
@@ -351,3 +370,31 @@ best_model = LSTM(input_size,
 load_checkpoint(destination_folder + '/model.pt', best_model, optimizer)
 optimizer = optim.Adam(best_model.parameters(), lr=learning_rate)
 test_evaluation(best_model, test_iter)
+myField = Field(sequential=False)
+fields_test = [("id", myField), ('text', text_field)]
+test = TabularDataset(path=source_folder+"en_test_task1.csv", format='CSV', fields=fields_test, skip_header=True)
+print(len(test))
+test_iter = BucketIterator(test, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
+print(test[0].__dict__.keys())
+myField.build_vocab(test)
+#print(test[0].text)
+model.eval()
+ids = []
+labels = []
+with torch.no_grad():
+    for batch in test_iter:
+        #labels = labels.to(device)
+        text = batch.text
+        id = batch.id
+        #text_len = batch.text_len.to(device)
+        #print(text[0])
+        #print(text[1])
+        #print(text_len)
+        output = model(text[0], text[1])
+        output = torch.round(output)
+        for idx, lbl in zip(id, output):
+            ids.append(myField.vocab.itos[idx])
+            labels.append(label_field.vocab.itos[int(lbl)])
+data_tuples = list(zip(ids,labels))
+df = pd.DataFrame(data_tuples, columns=['id','label'])
+df.to_csv("results.csv",sep=",",index=False)

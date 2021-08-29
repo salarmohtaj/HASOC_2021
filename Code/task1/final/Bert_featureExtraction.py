@@ -395,3 +395,29 @@ best_model = BERTGRUSentiment(bert,
 load_checkpoint(destination_folder + '/model.pt', best_model, optimizer)
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 test_evaluation(best_model, test_iter)
+
+myField = Field(sequential=False)
+fields_test = [("id", myField), ('text', text_field)]
+test = TabularDataset(path=source_folder+"en_test_task1.csv", format='CSV', fields=fields_test, skip_header=True)
+print(len(test))
+test_iter = BucketIterator(test, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
+print(test[0].__dict__.keys())
+myField.build_vocab(test)
+#print(test[0].text)
+model.eval()
+ids = []
+labels = []
+with torch.no_grad():
+    for batch in test_iter:
+        #labels = labels.to(device)
+        id = batch.id.to(device)
+        text = batch.text.to(device)
+        output = model(text).squeeze(1)
+        output = output.flatten()
+        output = torch.round(output)
+        for idx, lbl in zip(id, output):
+            ids.append(myField.vocab.itos[idx])
+            labels.append(label_field.vocab.itos[int(lbl)])
+data_tuples = list(zip(ids,labels))
+df = pd.DataFrame(data_tuples, columns=['id','label'])
+df.to_csv("results.csv",sep=",",index=False)
