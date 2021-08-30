@@ -6,23 +6,27 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import torch.optim as optim
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from transformers import BertModel, BertForSequenceClassification, AdamW, BertConfig, BertTokenizer, get_linear_schedule_with_warmup
 import os
 import re
 import pickle
 import demoji
 import time
-import numpy as np
 from collections import OrderedDict
 import argparse
+import spacy
+try:
+    spacy_en = spacy.load('en_core_web_sm')
+except:
+    spacy_en = spacy.load('en')
 
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Master script to prepare the ACR test')
     parser.add_argument("--epochs", help="Number of epochs, default=50", default=50)
-    parser.add_argument("--bert", help="Bert model (base or large), default=base", default="base")
     parser.add_argument("--lr", help="Learning rate for Adam, default=1e-3", default=1e-3)
+    parser.add_argument("--embedding", help="The embedding size, default=100", default=100)
+    parser.add_argument("--glove", help="Using Glove for vectorization, default=False", default=False)
     parser.add_argument("--hidden", help="The hidden size, default=256", default=256)
     parser.add_argument("--dropout", help="The dropout, default=0.25", default=0.25)
     args = parser.parse_args()
@@ -31,27 +35,28 @@ if __name__ == '__main__':
 #learning_rate = float(args.lr)
 
 ########################################################################
-runmane = "bert_feature_extraction"
+runmane = "word_lstm"
 BATCH_SIZE = 32
 number_of_epochs = int(args.epochs)
+embedding_size = int(args.embedding)
 learning_rate = float(args.lr)
+glove = args.glove
+if glove == "False":
+    glove = False
+else:
+    glove = True
 hidden_size = int(args.hidden)
 dropout = float(args.dropout)
-bert_model = str(args.bert)
 
-OUTPUT_DIM = 1
+
 number_of_layers = 2
-BIDIRECTIONAL = True
-bert_model_name = "bert-"+bert_model+"-uncased"
-MAX_LEN = 128
+
 language_name = str("English")
-destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(bert_model)+"_"+str(learning_rate)+"_"+str(dropout)
-report_address = "Reports/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(bert_model)+"_"+str(learning_rate)+"_"+str(dropout)
+destination_folder = "Model/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(embedding_size)+"_"+str(int(glove))+"_"+str(learning_rate)+"_"+str(dropout)
+report_address = "Reports/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(embedding_size)+"_"+str(int(glove))+"_"+str(learning_rate)+"_"+str(dropout)
 ########################################################################
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-
 
 source_folder = "data/"
 try:
@@ -67,36 +72,25 @@ try:
 except:
     pass
 with open(report_address,"a+") as f:
-    f.write(runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(bert_model)+"_"+str(learning_rate)+"_"+str(dropout)+"\n\n")
-
-
+    f.write(runmane+"_"+language_name+"_"+str(hidden_size)+"_"+str(embedding_size)+"_"+str(int(glove))+"_"+str(learning_rate)+"_"+str(dropout)+"\n\n")
 
 def text_preprocess(text):
     text = re.sub("@([A-Za-z0-9_]+)", "username", text)
     text = re.sub(r"http\S+", "link", text)
     text = demoji.replace_with_desc(text, sep=" ")
     text = re.sub("[ ]+", " ", text)
+    return [tok.text for tok in spacy_en.tokenizer(text)]
+
+#tokenizer = lambda text: list(text)
+def fake_tokenizer(text):
     return text
 
-tokenizer = BertTokenizer.from_pretrained(bert_model_name)
 
-# A small helper function that will call the BERT tokenizer and truncate.
-def bert_tokenize(text):
-    text = text_preprocess(text)
-    return tokenizer.tokenize(text)[:MAX_LEN - 2]
-
-# add the [CLS] token in the beginning and [SEP] at the end, and that we use a dummy padding token
-# compatible with BERT.
-text_field = Field(sequential=True, tokenize=bert_tokenize, pad_token=tokenizer.pad_token,
-                   init_token=tokenizer.cls_token, eos_token=tokenizer.sep_token,
-                   batch_first=True
-                   )
-
+text_field = Field(tokenize = fake_tokenizer, sequential = True, preprocessing = text_preprocess, lower = True, include_lengths = True, batch_first = True)
+#text_field = Field(tokenize = "spacy", sequential = True, preprocessing = None, lower = True, include_lengths = True, batch_first = True)
 #label_field = Field(sequential=False, use_vocab=False, batch_first=True, dtype=torch.float)
-#label_field = LabelField(is_target=True, dtype=torch.float)
 label_field = LabelField(is_target=True, dtype=torch.float)
 fields = [(None, None), ("_id", None), ('text', text_field), ('label', label_field), ('task_2', None)]
-
 
 dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=fields, skip_header=True)
 
@@ -106,19 +100,30 @@ dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=
 #print(len(dataset))
 
 train, test, valid = dataset.split([0.7, 0.1, 0.2], stratified=True) ## Keeping the same ratio of labels in the train, valid and test datasets
+
+#if glove:
+#    text_field.build_vocab(train, min_freq=2, vectors='glove.6B.' + str(embedding_size) + 'd')
+#else:
+#    text_field.build_vocab(train, min_freq=2)
 text_field.build_vocab(train, min_freq=2)
+
 label_field.build_vocab(train)
+#label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
 #print(label_field.vocab.itos)
 #print(label_field.vocab.stoi)
-label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
-
+#label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
+#print(label_field.vocab.stoi[train[0].label])
+#print(label_field.vocab(["NOT"]))
+#print(label_field.vocab.itos)
+#print(label_field.vocab.stoi)
 #print(len(train))
 #print(len(valid))
-# Here, we tell torchtext to use the vocabulary of BERT's tokenizer.
-# .stoi is the map from strings to integers, and itos from integers to strings.
-text_field.vocab.stoi = tokenizer.vocab
-text_field.vocab.itos = list(tokenizer.vocab)
-
+# print(label_field.vocab.stoi)
+# label_field.vocab.itos[1] = "HOF"
+# label_field.vocab.itos[0] = "NOT"
+#print(label_field.vocab.itos[1])
+# print(label_field.vocab.itos[0])
+# print(label_field.vocab.stoi)
 # Iterators
 train_iter = BucketIterator(train, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
 valid_iter = BucketIterator(valid, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
@@ -126,54 +131,36 @@ test_iter = BucketIterator(test, batch_size=BATCH_SIZE, sort_key=lambda x: len(x
 
 
 
-bert = BertModel.from_pretrained(bert_model_name)
-
-
-class BERTGRUSentiment(nn.Module):
+class LSTM(nn.Module):
     def __init__(self,
-                 bert,
-                 hidden_dim,
-                 output_dim,
-                 n_layers,
-                 bidirectional,
-                 dropout):
-        super().__init__()
-        self.bert = bert
-        embedding_dim = bert.config.to_dict()['hidden_size']
-        self.rnn = nn.GRU(embedding_dim,
-                          hidden_dim,
-                          num_layers=n_layers,
-                          bidirectional=bidirectional,
-                          batch_first=True,
-                          dropout=0 if n_layers < 2 else dropout)
-        self.out = nn.Linear(hidden_dim * 2 if bidirectional else hidden_dim, output_dim)
-        self.dropout = nn.Dropout(dropout)
-    def forward(self, text):
-        # text = [batch size, sent len]
-        with torch.no_grad():
-            embedded = self.bert(text)[0]
-        # embedded = [batch size, sent len, emb dim]
-        _, hidden = self.rnn(embedded)
-        # hidden = [n layers * n directions, batch size, emb dim]
-        if self.rnn.bidirectional:
-            hidden = self.dropout(torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1))
-        else:
-            hidden = self.dropout(hidden[-1, :, :])
-        # hidden = [batch size, hid dim]
-        output = self.out(hidden)
-        # output = [batch size, out dim]
-        #return output
-        return torch.sigmoid(output)
-
-
-BIDIRECTIONAL = True
-
-model = BERTGRUSentiment(bert,
-                         hidden_size,
-                         OUTPUT_DIM,
-                         number_of_layers,
-                         BIDIRECTIONAL,
-                         dropout)
+                 input_size,
+                 embedding_size = 300,
+                 hidden_size = 256,
+                 number_of_layers = 2,
+                 dropout = 0.5):
+        super(LSTM, self).__init__()
+        self.embedding = nn.Embedding(input_size, embedding_size)
+        self.hidden_size = hidden_size
+        self.lstm = nn.LSTM(input_size=embedding_size,
+                            hidden_size=hidden_size,
+                            num_layers=number_of_layers,
+                            batch_first=True,
+                            bidirectional=True)
+        self.drop = nn.Dropout(p=dropout)
+        self.fc = nn.Linear(2*hidden_size, 1)
+    def forward(self, text, text_len):
+        text_emb = self.embedding(text)
+        packed_input = pack_padded_sequence(text_emb, text_len.cpu(), batch_first=True, enforce_sorted=False)
+        packed_output, _ = self.lstm(packed_input)
+        output, _ = pad_packed_sequence(packed_output, batch_first=True)
+        out_forward = output[range(len(output)), text_len - 1, :self.hidden_size]
+        out_reverse = output[:, 0, self.hidden_size:]
+        out_reduced = torch.cat((out_forward, out_reverse), 1)
+        text_fea = self.drop(out_reduced)
+        text_fea = self.fc(text_fea)
+        text_fea = torch.squeeze(text_fea, 1)
+        text_out = torch.sigmoid(text_fea)
+        return text_out
 
 
 # Save and Load Functions
@@ -212,28 +199,56 @@ def load_metrics(load_path):
     return state_dict['train_loss_list'], state_dict['valid_loss_list'], state_dict['epoch_counter_list']
 
 
-print("###################################")
+# Training Function
+def train(model, iterator, optimizer, criterion):
+    epoch_loss = 0
+    epoch_acc = 0
+    model.train()
+    for ((text, text_len), labels) in iterator:
+        optimizer.zero_grad()
+        labels = labels.to(device)
+        text = text.to(device)
+        text_len = text_len.to(device)
+        output = model(text, text_len)
+        loss = criterion(output, labels)
+        acc = binary_accuracy(output, labels)
+        loss.backward()
+        optimizer.step()
+        # update running values
+        epoch_loss += loss.item()
+        epoch_acc += acc.item()
+    return epoch_loss / len(iterator), epoch_acc / len(iterator)
+
+
+def evaluate(model, iterator, criterion):
+    epoch_loss = 0
+    epoch_acc = 0
+    model.eval()
+    with torch.no_grad():
+        for ((text, text_len), labels) in iterator:
+            labels = labels.to(device)
+            text = text.to(device)
+            text_len = text_len.to(device)
+            output = model(text, text_len)
+            loss = criterion(output, labels)
+            acc = binary_accuracy(output, labels)
+            epoch_loss += loss.item()
+            epoch_acc += acc.item()
+    return epoch_loss / len(iterator), epoch_acc / len(iterator)
+
+
+input_size = len(text_field.vocab)
+model = LSTM(input_size,
+             embedding_size,
+             hidden_size,
+             number_of_layers,
+             dropout).to(device)
+criterion=nn.BCELoss()
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 print(f'The model has {count_parameters(model):,} parameters')
-
-for name, param in model.named_parameters():
-    if name.startswith('bert'):
-        param.requires_grad = False
-
-print(f'The model has {count_parameters(model):,} trainable parameters')
-print("###################################")
-def print_grad_parameters(model):
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(name)
-
-
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-criterion = nn.BCELoss()
-model = model.to(device)
-criterion = criterion.to(device)
 
 
 def binary_accuracy(preds, y):
@@ -243,61 +258,19 @@ def binary_accuracy(preds, y):
     acc = correct.sum() / len(correct)
     return acc
 
-
-
-def train(model, iterator, optimizer, criterion):
-    epoch_loss = 0
-    epoch_acc = 0
-    model.train()
-    for batch in iterator:
-        optimizer.zero_grad()
-        labels = batch.label
-        #text = batch.text.t()
-        text = batch.text
-        output = model(text).squeeze(1)
-        loss = criterion(output, labels)
-        acc = binary_accuracy(output, labels)
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-        epoch_acc += acc.item()
-    return epoch_loss / len(iterator), epoch_acc / len(iterator)
-
-def evaluate(model, iterator, criterion):
-    epoch_loss = 0
-    epoch_acc = 0
-    model.eval()
-    with torch.no_grad():
-        for batch in iterator:
-            labels = batch.label
-            # text = batch.text.t()
-            text = batch.text
-            output = model(text).squeeze(1)
-            loss = criterion(output, labels)
-            acc = binary_accuracy(output, labels)
-            epoch_loss += loss.item()
-            epoch_acc += acc.item()
-    return epoch_loss / len(iterator), epoch_acc / len(iterator)
-
-
 def epoch_time(start_time, end_time):
     elapsed_time = end_time - start_time
     elapsed_mins = int(elapsed_time / 60)
     elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
     return elapsed_mins, elapsed_secs
 
-
-N_EPOCHS = 5
-best_valid_loss = float('inf')
+best_valid_loss=float("Inf")
 
 training_stats = []
 train_loss_list = []
 valid_loss_list = []
 epoch_counter_list = []
 last_best_loss = 0
-
-
-
 for epoch in range(number_of_epochs):
     start_time = time.time()
     train_loss, train_acc = train(model, train_iter, optimizer, criterion)
@@ -318,7 +291,7 @@ for epoch in range(number_of_epochs):
         last_best_loss = epoch
         print("\t---> Saving the model <---")
         best_valid_loss = valid_loss
-        ##torch.save(model.state_dict(), 'tut6-model.pt')
+        #torch.save(model.state_dict(), 'tut6-model.pt')
         save_checkpoint(destination_folder + '/model.pt', model, optimizer, best_valid_loss)
         save_metrics(destination_folder + '/metrics.pt', train_loss_list, valid_loss_list, epoch_counter_list)
     training_stats.append(
@@ -338,6 +311,7 @@ for epoch in range(number_of_epochs):
         with open(report_address, "a") as f:
             f.write("Termination because of lack of improvement in the last 10 epochs\n")
         break
+
 save_metrics(destination_folder + '/metrics.pt', train_loss_list, valid_loss_list, epoch_counter_list)
 print('Finished Training!')
 
@@ -355,14 +329,12 @@ def test_evaluation(model, test_loader, version='title', threshold=0.5):
     y_true = []
     model.eval()
     with torch.no_grad():
-        for batch in test_loader:
-            labels = batch.label.to(device)
-            # text = batch.text.t()
-            text = batch.text.to(device)
-            output = model(text).squeeze(1)
-            output = output.flatten()
-            labels = labels.flatten()
-            output = torch.round(output)
+        for ((text, text_len), labels) in test_loader:
+            labels = labels.to(device)
+            text = text.to(device)
+            text_len = text_len.to(device)
+            output = model(text, text_len)
+            output = (output > threshold).int()
             y_pred.extend(output.tolist())
             y_true.extend(labels.tolist())
 
@@ -372,7 +344,7 @@ def test_evaluation(model, test_loader, version='title', threshold=0.5):
     cm = confusion_matrix(y_true, y_pred, labels=[1, 0])
     with open(report_address, "a") as f:
         f.write("Classification Report:\n")
-        f.write(str(classificationreport) + "\n")
+        f.write(str(classificationreport)+"\n")
     #ax = plt.subplot()
     #sns.heatmap(cm, annot=True, ax=ax, cmap='Blues', fmt="d")
     #ax.set_title('Confusion Matrix')
@@ -383,19 +355,17 @@ def test_evaluation(model, test_loader, version='title', threshold=0.5):
 
 
 #best_model = LSTM().to(device)
-best_model = BERTGRUSentiment(bert,
-                         hidden_size,
-                         OUTPUT_DIM,
-                         number_of_layers,
-                         BIDIRECTIONAL,
-                         dropout).to(device)
+best_model = LSTM(input_size,
+             embedding_size,
+             hidden_size,
+             number_of_layers,
+             dropout).to(device)
 #best_model.load_state_dict(torch.load('tut6-model.pt'))
 
 
 load_checkpoint(destination_folder + '/model.pt', best_model, optimizer)
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-test_evaluation(best_model, test_iter)
-
+optimizer = optim.Adam(best_model.parameters(), lr=learning_rate)
+#est_evaluation(best_model, test_iter)
 myField = Field(sequential=False)
 fields_test = [("id", myField), ('text', text_field)]
 test = TabularDataset(path=source_folder+"en_test_task1.csv", format='CSV', fields=fields_test, skip_header=True)
@@ -410,10 +380,13 @@ labels = []
 with torch.no_grad():
     for batch in test_iter:
         #labels = labels.to(device)
-        id = batch.id.to(device)
-        text = batch.text.to(device)
-        output = model(text).squeeze(1)
-        output = output.flatten()
+        text = batch.text
+        id = batch.id
+        #text_len = batch.text_len.to(device)
+        #print(text[0])
+        #print(text[1])
+        #print(text_len)
+        output = best_model(text[0], text[1])
         output = torch.round(output)
         for idx, lbl in zip(id, output):
             ids.append(myField.vocab.itos[idx])

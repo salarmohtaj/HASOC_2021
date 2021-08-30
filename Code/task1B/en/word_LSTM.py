@@ -14,6 +14,7 @@ import time
 from collections import OrderedDict
 import argparse
 import spacy
+
 try:
     spacy_en = spacy.load('en_core_web_sm')
 except:
@@ -58,7 +59,7 @@ report_address = "Reports/"+runmane+"_"+language_name+"_"+str(hidden_size)+"_"+s
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-number_of_epochs = 1
+number_of_epochs = 10
 embedding_size = 50
 hidden_size = 16
 
@@ -93,8 +94,8 @@ def fake_tokenizer(text):
 text_field = Field(tokenize = fake_tokenizer, sequential = True, preprocessing = text_preprocess, lower = True, include_lengths = True, batch_first = True)
 #text_field = Field(tokenize = "spacy", sequential = True, preprocessing = None, lower = True, include_lengths = True, batch_first = True)
 #label_field = Field(sequential=False, use_vocab=False, batch_first=True, dtype=torch.float)
-label_field = LabelField(is_target=True, dtype=torch.float)
-fields = [(None, None), ("_id", None), ('text', text_field), ('label', label_field), ('task_2', None)]
+label_field = LabelField(is_target=True)
+fields = [(None, None), ("_id", None), ('text', text_field), ('task_1', None), ('label', label_field)]
 
 dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=fields, skip_header=True)
 
@@ -118,8 +119,8 @@ label_field.build_vocab(train)
 #label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
 #print(label_field.vocab.stoi[train[0].label])
 #print(label_field.vocab(["NOT"]))
-#print(label_field.vocab.itos)
-#print(label_field.vocab.stoi)
+print(label_field.vocab.itos)
+print(label_field.vocab.stoi)
 #print(len(train))
 #print(len(valid))
 # print(label_field.vocab.stoi)
@@ -151,7 +152,7 @@ class LSTM(nn.Module):
                             batch_first=True,
                             bidirectional=True)
         self.drop = nn.Dropout(p=dropout)
-        self.fc = nn.Linear(2*hidden_size, 1)
+        self.fc = nn.Linear(2*hidden_size, 4)
     def forward(self, text, text_len):
         text_emb = self.embedding(text)
         packed_input = pack_padded_sequence(text_emb, text_len.cpu(), batch_first=True, enforce_sorted=False)
@@ -163,8 +164,8 @@ class LSTM(nn.Module):
         text_fea = self.drop(out_reduced)
         text_fea = self.fc(text_fea)
         text_fea = torch.squeeze(text_fea, 1)
-        text_out = torch.sigmoid(text_fea)
-        return text_out
+        #text_out = torch.sigmoid(text_fea)
+        return text_fea
 
 
 # Save and Load Functions
@@ -215,7 +216,8 @@ def train(model, iterator, optimizer, criterion):
         text_len = text_len.to(device)
         output = model(text, text_len)
         loss = criterion(output, labels)
-        acc = binary_accuracy(output, labels)
+        acc = accuracy_score(labels.tolist(), torch.argmax(output, dim=1).tolist())
+        #acc = binary_accuracy(output, labels)
         loss.backward()
         optimizer.step()
         # update running values
@@ -235,7 +237,8 @@ def evaluate(model, iterator, criterion):
             text_len = text_len.to(device)
             output = model(text, text_len)
             loss = criterion(output, labels)
-            acc = binary_accuracy(output, labels)
+            #acc = binary_accuracy(output, labels)
+            acc = accuracy_score(labels.tolist(), torch.argmax(output, dim=1).tolist())
             epoch_loss += loss.item()
             epoch_acc += acc.item()
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
@@ -247,7 +250,7 @@ model = LSTM(input_size,
              hidden_size,
              number_of_layers,
              dropout).to(device)
-criterion=nn.BCELoss()
+criterion=nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
 def count_parameters(model):
@@ -369,7 +372,7 @@ best_model = LSTM(input_size,
 
 load_checkpoint(destination_folder + '/model.pt', best_model, optimizer)
 optimizer = optim.Adam(best_model.parameters(), lr=learning_rate)
-test_evaluation(best_model, test_iter)
+#est_evaluation(best_model, test_iter)
 myField = Field(sequential=False)
 fields_test = [("id", myField), ('text', text_field)]
 test = TabularDataset(path=source_folder+"en_test_task1.csv", format='CSV', fields=fields_test, skip_header=True)
@@ -390,8 +393,9 @@ with torch.no_grad():
         #print(text[0])
         #print(text[1])
         #print(text_len)
-        output = model(text[0], text[1])
-        output = torch.round(output)
+        output = best_model(text[0], text[1])
+        #output = torch.round(output)
+        output = torch.argmax(output,dim=1).tolist()
         for idx, lbl in zip(id, output):
             ids.append(myField.vocab.itos[idx])
             labels.append(label_field.vocab.itos[int(lbl)])
