@@ -113,6 +113,8 @@ train, test, valid = dataset.split([0.7, 0.1, 0.2], stratified=True) ## Keeping 
 text_field.build_vocab(train, min_freq=2)
 
 label_field.build_vocab(train)
+print(f'the train, validation and test sets includes {len(train)},{len(valid)} and {len(test)} instances, respectively')
+
 #label_field.vocab.stoi = OrderedDict([('HOF', 1), ('NOT', 0)])
 #print(label_field.vocab.itos)
 #print(label_field.vocab.stoi)

@@ -100,6 +100,7 @@ dataset = TabularDataset(path=source_folder+"rawData.csv", format='CSV', fields=
 #print(len(dataset))
 
 train, test, valid = dataset.split([0.7, 0.1, 0.2], stratified=True) ## Keeping the same ratio of labels in the train, valid and test datasets
+print(f'the train, validation and test sets includes {len(train)},{len(valid)} and {len(test)} instances, respectively')
 
 #if glove:
 #    text_field.build_vocab(train, min_freq=2, vectors='glove.6B.' + str(embedding_size) + 'd')
@@ -365,32 +366,36 @@ best_model = LSTM(input_size,
 
 load_checkpoint(destination_folder + '/model.pt', best_model, optimizer)
 optimizer = optim.Adam(best_model.parameters(), lr=learning_rate)
-#est_evaluation(best_model, test_iter)
-myField = Field(sequential=False)
-fields_test = [("id", myField), ('text', text_field)]
-test = TabularDataset(path=source_folder+"en_test_task1.csv", format='CSV', fields=fields_test, skip_header=True)
-print(len(test))
-test_iter = BucketIterator(test, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
-print(test[0].__dict__.keys())
-myField.build_vocab(test)
-#print(test[0].text)
-model.eval()
-ids = []
-labels = []
-with torch.no_grad():
-    for batch in test_iter:
-        #labels = labels.to(device)
-        text = batch.text
-        id = batch.id
-        #text_len = batch.text_len.to(device)
-        #print(text[0])
-        #print(text[1])
-        #print(text_len)
-        output = best_model(text[0], text[1])
-        output = torch.round(output)
-        for idx, lbl in zip(id, output):
-            ids.append(myField.vocab.itos[idx])
-            labels.append(label_field.vocab.itos[int(lbl)])
-data_tuples = list(zip(ids,labels))
-df = pd.DataFrame(data_tuples, columns=['id','label'])
-df.to_csv("results.csv",sep=",",index=False)
+test_evaluation(best_model, test_iter)
+
+
+############### inference ##############
+# myField = Field(sequential=False)
+# fields_test = [("id", myField), ('text', text_field)]
+# test = TabularDataset(path=source_folder+"en_test_task1.csv", format='CSV', fields=fields_test, skip_header=True)
+# print(len(test))
+# test_iter = BucketIterator(test, batch_size=BATCH_SIZE, sort_key=lambda x: len(x.text),device=device, sort=True, sort_within_batch=True)
+# print(test[0].__dict__.keys())
+# myField.build_vocab(test)
+# #print(test[0].text)
+# model.eval()
+# ids = []
+# labels = []
+# with torch.no_grad():
+#     for batch in test_iter:
+#         #labels = labels.to(device)
+#         text = batch.text
+#         id = batch.id
+#         #text_len = batch.text_len.to(device)
+#         #print(text[0])
+#         #print(text[1])
+#         #print(text_len)
+#         output = best_model(text[0], text[1])
+#         output = torch.round(output)
+#         for idx, lbl in zip(id, output):
+#             ids.append(myField.vocab.itos[idx])
+#             labels.append(label_field.vocab.itos[int(lbl)])
+# data_tuples = list(zip(ids,labels))
+# df = pd.DataFrame(data_tuples, columns=['id','label'])
+# df.to_csv("results.csv",sep=",",index=False)
+##############################################
